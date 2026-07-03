@@ -1,197 +1,162 @@
-package me.aidan.sydney.managers;
+package me.alpha432.oyvey.manager;
 
-import lombok.Getter;
-import me.aidan.sydney.Sydney;
-import me.aidan.sydney.events.SubscribeEvent;
-import me.aidan.sydney.events.impl.*;
-import me.aidan.sydney.mixins.accessors.EntityAccessor;
-import me.aidan.sydney.modules.Module;
-import me.aidan.sydney.modules.impl.core.RotationsModule;
-import me.aidan.sydney.utils.IMinecraft;
-import me.aidan.sydney.utils.animations.Easing;
-import me.aidan.sydney.utils.rotations.Rotation;
-import me.aidan.sydney.utils.system.MathUtils;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.util.math.MathHelper;
+import me.alpha432.oyvey.event.Stage;
+import me.alpha432.oyvey.event.impl.entity.player.TickEvent;
+import me.alpha432.oyvey.event.impl.entity.player.TravelEvent;
+import me.alpha432.oyvey.event.impl.entity.player.UpdateWalkingPlayerEvent;
+import me.alpha432.oyvey.event.system.Subscribe;
+import me.alpha432.oyvey.util.models.Angles;
+import me.alpha432.oyvey.util.traits.Util;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.util.Mth;
 
-import java.util.HashMap;
-import java.util.concurrent.PriorityBlockingQueue;
+import java.util.*;
+import java.util.function.Predicate;
 
-public class RotationManager implements IMinecraft {
-    private final PriorityBlockingQueue<Rotation> queue = new PriorityBlockingQueue<>(11, this::compareRotations);
-    @Getter private Rotation rotation = null;
+public class RotationManager implements Util {
+    private final List<Callback> callbacks = new ArrayList<>();
 
-    private float prevFixYaw;
+    private boolean updateRender;
+    private Angles renderSnapshot, renderSnapshot0;
 
-    private float prevYaw;
-    private float prevPitch;
-
-    @Getter private float serverYaw;
-    @Getter private float serverPitch;
-
-    private float prevRenderYaw, prevRenderPitch;
-    private long lastRenderTime = 0L;
-
-    private static final HashMap<String, Integer> PRIORITIES = new HashMap<>();
-    static {
-        PRIORITIES.put("KillAura", 1);
-        PRIORITIES.put("AutoCrystal", 2);
-        PRIORITIES.put("SpeedMine", 3);
-        PRIORITIES.put("SelfFill", 4);
-    }
+    private Angles snapshot;
+    private Angles travelSnapshot;
 
     public RotationManager() {
-        Sydney.EVENT_HANDLER.subscribe(this);
+        EVENT_BUS.register(this);
     }
 
-    @SubscribeEvent(priority = Integer.MIN_VALUE)
-    public void onPlayerUpdate(PlayerUpdateEvent event) {
-        queue.removeIf(rotation -> System.currentTimeMillis() - rotation.getTime() > 100);
-        rotation = queue.peek();
-
-        if (rotation == null) return;
-        lastRenderTime = System.currentTimeMillis();
+    @Subscribe(priority = 1000)
+    public void onTickPre(TickEvent.Pre event) {
+        executeCallbacks(callback -> callback.type() == Type.SYNC);
     }
 
-    @SubscribeEvent(priority = Integer.MAX_VALUE)
-    public void onUpdateMovement(UpdateMovementEvent event) {
-        if (rotation == null) return;
+    @Subscribe
+    public void onTravelPre(TravelEvent.Pre event) {
+        if (callbacks.isEmpty())
+            return;
 
-        prevYaw = mc.player.getYaw();
-        prevPitch = mc.player.getPitch();
-
-        mc.player.setYaw(rotation.getYaw());
-        mc.player.setPitch(rotation.getPitch());
-    }
-
-    @SubscribeEvent(priority = Integer.MIN_VALUE)
-    public void onUpdateMovement$POST(UpdateMovementEvent.Post event) {
-        if (rotation == null) return;
-
-        mc.player.setYaw(prevYaw);
-        mc.player.setPitch(prevPitch);
-    }
-
-    @SubscribeEvent
-    public void onUpdateVelocity(UpdateVelocityEvent event) {
-        if (mc.player == null) return;
-        if (!Sydney.MODULE_MANAGER.getModule(RotationsModule.class).movementFix.getValue()) return;
-        if (rotation == null) return;
-
-        event.setVelocity(EntityAccessor.invokeMovementInputToVelocity(event.getMovementInput(), event.getSpeed(), rotation.getYaw()));
-        event.setCancelled(true);
-    }
-
-    @SubscribeEvent
-    public void onKeyboardTick(KeyboardTickEvent event) {
-        if (mc.player == null || mc.world == null || mc.player.isRiding()) return;
-        if (!Sydney.MODULE_MANAGER.getModule(RotationsModule.class).movementFix.getValue()) return;
-        if (rotation == null) return;
-
-        float movementForward = event.getMovementForward();
-        float movementSideways = event.getMovementSideways();
-
-        float delta = (mc.player.getYaw() - rotation.getYaw()) * MathHelper.RADIANS_PER_DEGREE;
-
-        float cos = MathHelper.cos(delta);
-        float sin = MathHelper.sin(delta);
-
-        event.setMovementForward(Math.round(movementForward * cos + movementSideways * sin));
-        event.setMovementSideways(Math.round(movementSideways * cos - movementForward * sin));
-        event.setCancelled(true);
-    }
-
-    @SubscribeEvent
-    public void onPlayerJump(PlayerJumpEvent event) {
-        if (mc.player == null || mc.world == null || mc.player.isRiding()) return;
-        if (!Sydney.MODULE_MANAGER.getModule(RotationsModule.class).movementFix.getValue()) return;
-        if (rotation == null) return;
-
-        prevFixYaw = mc.player.getYaw();
-        mc.player.setYaw(rotation.getYaw());
-    }
-
-    @SubscribeEvent
-    public void onPlayerJump$POST(PlayerJumpEvent.Post event) {
-        if (mc.player == null || mc.world == null || mc.player.isRiding()) return;
-        if (!Sydney.MODULE_MANAGER.getModule(RotationsModule.class).movementFix.getValue()) return;
-        if (rotation == null) return;
-
-        mc.player.setYaw(prevFixYaw);
-    }
-
-    @SubscribeEvent
-    public void onPacketSend(PacketSendEvent event) {
-        if (mc.player == null) return;
-
-        if (event.getPacket() instanceof PlayerMoveC2SPacket packet) {
-            if (!packet.changesLook()) return;
-
-            serverYaw = packet.getYaw(mc.player.getYaw());
-            serverPitch = packet.getPitch(mc.player.getPitch());
+        Callback highest = callbacks.stream().max(Comparator.comparing(Callback::priority)).orElseThrow();
+        if (highest.type() == Type.SYNC) {
+            travelSnapshot = new Angles(mc.player.getYRot(), mc.player.getXRot());
+            mc.player.setYRot(highest.angles().yRot());
+            mc.player.setXRot(highest.angles().xRot());
         }
     }
 
-    public void rotate(float[] rotations, int priority) {
-        rotate(rotations[0], rotations[1], priority);
+    @Subscribe
+    public void onTravelPost(TravelEvent.Post event) {
+        if (travelSnapshot != null) {
+            mc.player.setYRot(travelSnapshot.yRot());
+            mc.player.setXRot(travelSnapshot.xRot());
+            travelSnapshot = null;
+        }
     }
 
-    public void rotate(float yaw, float pitch, int priority) {
-        queue.removeIf(rotation -> rotation.getModule() == null && rotation.getPriority() == priority);
-        queue.add(new Rotation(yaw, pitch, priority));
+    @Subscribe
+    public void onUpdateWalking(UpdateWalkingPlayerEvent event) {
+        if (event.getStage() == Stage.PRE) {
+            if (callbacks.isEmpty()) {
+                updateRenderSnapshot(new Angles(mc.player.getYRot(), mc.player.getXRot()), false);
+                return;
+            }
+            Callback highest = callbacks.stream().max(Comparator.comparing(Callback::priority)).orElseThrow();
+
+            updateRenderSnapshot(highest.angles(), true);
+
+            snapshot = new Angles(mc.player.getYRot(), mc.player.getXRot());
+            mc.player.setYRot(highest.angles().yRot());
+            mc.player.setXRot(highest.angles().xRot());
+        } else if (snapshot != null) {
+            executeCallbacks(callback -> callback.type() == Type.MOTION);
+
+            mc.player.setYRot(snapshot.yRot());
+            mc.player.setXRot(snapshot.xRot());
+            snapshot = null;
+        }
     }
 
-    public void rotate(float[] rotations, Module module) {
-        rotate(rotations[0], rotations[1], module);
+    public void sync(Angles angles, Runnable runnable) {
+        sync(angles, 0, runnable);
     }
 
-    public void rotate(float yaw, float pitch, Module module) {
-        queue.removeIf(rotation -> rotation.getModule() == module);
-        queue.add(new Rotation(yaw, pitch, module, getModulePriority(module)));
+    public void sync(Angles angles, int priority, Runnable runnable) {
+        request(Type.SYNC, angles, priority, runnable);
     }
 
-    public void rotate(float[] rotations, Module module, int priority) {
-        rotate(rotations[0], rotations[1], module, priority);
+    public void motion(Angles angles, Runnable runnable) {
+        motion(angles, 0, runnable);
     }
 
-    public void rotate(float yaw, float pitch, Module module, int priority) {
-        queue.removeIf(rotation -> rotation.getModule() == module);
-        queue.add(new Rotation(yaw, pitch, module, priority));
+    public void motion(Angles angles, int priority, Runnable runnable) {
+        request(Type.MOTION, angles, priority, runnable);
     }
 
-    public void packetRotate(float[] rotations) {
-        packetRotate(rotations[0], rotations[1]);
+    public void silent(Angles angles, Runnable runnable) {
+        request(Type.SILENT, angles, 0, runnable);
     }
 
-    public void packetRotate(float yaw, float pitch) {
-        if (serverYaw == yaw && serverPitch == pitch) return;
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(Sydney.POSITION_MANAGER.getServerX(), Sydney.POSITION_MANAGER.getServerY(), Sydney.POSITION_MANAGER.getServerZ(), yaw, pitch, Sydney.POSITION_MANAGER.isServerOnGround(), mc.player.horizontalCollision));
+    public Angles getLerpRenderSnapshot(float lerp) {
+        if (!updateRender) return null;
+        return new Angles(
+                Mth.lerp(lerp, renderSnapshot0.yRot(), renderSnapshot.yRot()),
+                Mth.lerp(lerp, renderSnapshot0.xRot(), renderSnapshot.xRot())
+        );
     }
 
-    public boolean inRenderTime() {
-        return System.currentTimeMillis() - lastRenderTime < 1000;
+    public void sendDuplicate(float yaw, float pitch) {
+        mc.player.positionReminder = 20;
+        mc.player.yRotLast = yaw;
+        mc.player.xRotLast = pitch;
+        mc.player.connection.send(new ServerboundMovePlayerPacket.PosRot(
+                mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                yaw, pitch,
+                mc.player.onGround(), mc.player.horizontalCollision
+        ));
     }
 
-    public float[] getRenderRotations() {
-        float from = MathUtils.wrapAngle(prevRenderYaw), to = MathUtils.wrapAngle(rotation == null ? mc.player.getYaw() : getServerYaw());
-        float delta = to - from;
-        if(delta > 180) delta -= 380;
-        else if(delta < -180) delta += 360;
-
-        float yaw = MathHelper.lerp(Easing.toDelta(lastRenderTime, 1000), from, from + delta);
-        float pitch = MathHelper.lerp(Easing.toDelta(lastRenderTime, 1000), prevRenderPitch, rotation == null ? mc.player.getPitch() : getServerPitch());
-        prevRenderYaw = yaw;
-        prevRenderPitch = pitch;
-
-        return new float[]{yaw, pitch};
+    private void request(Type type, Angles angles, int priority, Runnable runnable) {
+        Callback callback = new Callback(type, angles, priority, runnable);
+        if (type == Type.SILENT) {
+            sendDuplicate(angles.yRot(), angles.xRot());
+            callback.execute();
+        } else {
+            callbacks.add(callback);
+        }
     }
 
-    public int getModulePriority(Module module) {
-        return PRIORITIES.getOrDefault(module.getName(), 0);
+    private void executeCallbacks(Predicate<Callback> filter) {
+        callbacks.removeIf(callback -> {
+            if (filter.test(callback)) {
+                callback.execute();
+                return true;
+            }
+            return false;
+        });
     }
 
-    private int compareRotations(Rotation target, Rotation rotation) {
-        if (target.getPriority() == rotation.getPriority()) return -Long.compare(target.getTime(), rotation.getTime());
-        return -Integer.compare(target.getPriority(), rotation.getPriority());
+    private void updateRenderSnapshot(Angles angles, boolean update) {
+        this.renderSnapshot0 = this.renderSnapshot;
+        this.renderSnapshot = angles;
+        this.updateRender = update;
+
+        if (renderSnapshot0 == null || renderSnapshot == null)
+            return;
+
+        if (Mth.abs(renderSnapshot.yRot() - renderSnapshot0.yRot()) > 320) {
+            this.renderSnapshot0 = this.renderSnapshot;
+        }
+    }
+
+    record Callback(Type type, Angles angles, int priority, Runnable action) {
+        public void execute() {
+            if (action != null) action.run();
+        }
+    }
+
+    public enum Type {
+        MOTION,
+        SYNC,
+        SILENT
     }
 }

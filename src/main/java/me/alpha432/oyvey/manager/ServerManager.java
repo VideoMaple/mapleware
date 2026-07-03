@@ -1,122 +1,88 @@
-package me.aidan.sydney.managers;
+package me.alpha432.oyvey.manager;
 
-import it.unimi.dsi.fastutil.Pair;
-import it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
-import lombok.Getter;
-import me.aidan.sydney.Sydney;
-import me.aidan.sydney.events.SubscribeEvent;
-import me.aidan.sydney.events.impl.*;
-import me.aidan.sydney.modules.impl.miscellaneous.FastLatencyModule;
-import me.aidan.sydney.utils.IMinecraft;
-import me.aidan.sydney.utils.system.Timer;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.client.network.ServerAddress;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
-import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
-import net.minecraft.network.packet.s2c.play.PlayerRemoveS2CPacket;
-import net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket;
+import me.alpha432.oyvey.features.Feature;
+import me.alpha432.oyvey.util.models.Timer;
 
 import java.util.Arrays;
-import java.util.UUID;
 
-@Getter
-public class ServerManager implements IMinecraft {
-    private final Timer setbackTimer = new Timer();
-    private final Timer responseTimer = new Timer();
+public class ServerManager
+        extends Feature {
+    private final float[] tpsCounts = new float[10];
+    private final Timer timer = new Timer();
+    private float tps = 20.0f;
+    private long lastUpdate = -1L;
+    private String serverBrand = "";
 
-    private final float[] tickRates = new float[20];
-    private int nextIndex = 0;
-    private long lastUpdate = -1;
-    private long timeJoined;
-
-    private Pair<ServerAddress, ServerInfo> lastConnection;
-
-    public ServerManager() {
-        Sydney.EVENT_HANDLER.subscribe(this);
+    public void onPacketReceived() {
+        this.timer.reset();
     }
 
-    @SubscribeEvent
-    public void onPacketReceive(PacketReceiveEvent event) {
-        responseTimer.reset();
-
-        if (event.getPacket() instanceof PlayerPositionLookS2CPacket) {
-            setbackTimer.reset();
+    public void update() {
+        float tps;
+        long currentTime = System.currentTimeMillis();
+        if (this.lastUpdate == -1L) {
+            this.lastUpdate = currentTime;
+            return;
         }
-
-        if (event.getPacket() instanceof WorldTimeUpdateS2CPacket) {
-            tickRates[nextIndex] = Math.clamp(20.0f / ((System.currentTimeMillis() - lastUpdate) / 1000.0F), 0.0f, 20.0f);
-            nextIndex = (nextIndex + 1) % tickRates.length;
-            lastUpdate = System.currentTimeMillis();
+        long timeDiff = currentTime - this.lastUpdate;
+        float tickTime = (float) timeDiff / 20.0f;
+        if (tickTime == 0.0f) {
+            tickTime = 50.0f;
         }
-    }
-
-    @SubscribeEvent
-    public void onClientConnect(ClientConnectEvent event) {
-        Arrays.fill(tickRates, 0);
-        nextIndex = 0;
-        timeJoined = System.currentTimeMillis();
-        lastUpdate = System.currentTimeMillis();
-    }
-
-    @SubscribeEvent
-    public void handleConnections(PacketReceiveEvent event) {
-        if (mc.world == null) return;
-
-        if (event.getPacket() instanceof PlayerListS2CPacket packet) {
-            if (packet.getActions().contains(PlayerListS2CPacket.Action.ADD_PLAYER)) {
-                for(PlayerListS2CPacket.Entry entry : packet.getPlayerAdditionEntries()) {
-                    Sydney.EVENT_HANDLER.post(new PlayerConnectEvent(entry.profile().getId()));
-                }
-            }
-        } else if(event.getPacket() instanceof PlayerRemoveS2CPacket packet) {
-            for(UUID id : packet.profileIds()) {
-                Sydney.EVENT_HANDLER.post(new PlayerDisconnectEvent(id));
-            }
+        if ((tps = 1000.0f / tickTime) > 20.0f) {
+            tps = 20.0f;
         }
-    }
-
-    @SubscribeEvent
-    public void onServerConnect(ServerConnectEvent event) {
-        lastConnection = new ObjectObjectImmutablePair<>(event.getAddress(), event.getInfo());
-    }
-
-    public float getTickRate() {
-        if (mc.player == null) return 0;
-        if (System.currentTimeMillis() - timeJoined < 4000) return 20;
-
-        int ticks = 0;
-        float tickRates = 0.0f;
-
-        for (float tickRate : this.tickRates) {
-            if (tickRate > 0) {
-                tickRates += tickRate;
-                ticks++;
-            }
+        System.arraycopy(this.tpsCounts, 0, this.tpsCounts, 1, this.tpsCounts.length - 1);
+        this.tpsCounts[0] = tps;
+        double total = 0.0;
+        for (float f : this.tpsCounts) {
+            total += f;
         }
-
-        return tickRates / ticks;
-    }
-
-    public int getPingDelay() {
-        return (int) (getPing() / 25.0f);
-    }
-
-    public int getPing() {
-        if (Sydney.MODULE_MANAGER.getModule(FastLatencyModule.class).isToggled()) {
-            return Sydney.MODULE_MANAGER.getModule(FastLatencyModule.class).getLatency();
+        if ((total /= this.tpsCounts.length) > 20.0) {
+            total = 20.0;
         }
+        this.tps = (float) total;
+        this.lastUpdate = currentTime;
+    }
 
-        PlayerListEntry entry = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
-        return entry == null ? 0 : entry.getLatency();
+    @Override
+    public void reset() {
+        Arrays.fill(this.tpsCounts, 20.0f);
+        this.tps = 20.0f;
+    }
+
+    public boolean isServerNotResponding() {
+        return this.timer.passedMs(2000);
+    }
+
+    public long serverRespondingTime() {
+        return this.timer.getPassedTimeMs();
+    }
+
+    public float getTpsFactor() {
+        return 20.0f / this.tps;
+    }
+
+    public float getTps() {
+        return this.tps;
     }
 
     public String getServerBrand() {
-        if (mc.getCurrentServerEntry() == null || mc.getNetworkHandler() == null || mc.getNetworkHandler().getBrand() == null) return "Vanilla";
-        return mc.getNetworkHandler().getBrand();
+        return this.serverBrand;
     }
 
-    public String getServer() {
-        return mc.isInSingleplayer() ? "Singleplayer" : ServerAddress.parse(mc.getCurrentServerEntry().address).getAddress();
+    public void setServerBrand(String brand) {
+        this.serverBrand = brand;
+    }
+
+    public int getPing() {
+        if (ServerManager.nullCheck()) {
+            return 0;
+        }
+        try {
+            return mc.getConnection().getPlayerInfo(mc.player.getGameProfile().name()).getLatency();
+        } catch (Throwable e) {
+            return 0;
+        }
     }
 }
