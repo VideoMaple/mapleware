@@ -1,62 +1,47 @@
-package me.alpha432.oyvey.manager;
+package me.aidan.sydney.managers;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import me.alpha432.oyvey.OyVey;
-import me.alpha432.oyvey.util.traits.Jsonable;
-import net.minecraft.world.entity.player.Player;
+import lombok.Getter;
+import me.aidan.sydney.Sydney;
+import me.aidan.sydney.modules.impl.core.FriendModule;
 
+import java.awt.*;
 import java.util.ArrayList;
-import java.util.List;
 
-public class FriendManager implements Jsonable {
-    private final List<String> friends = new ArrayList<>();
+@Getter
+public class FriendManager {
+    private final ArrayList<String> friends = new ArrayList<>();
 
-    public void init() {
-        OyVey.configManager.addConfig(this);
+    public boolean contains(String name) {
+        if (getFriendFire()) return false;
+        return friends.stream().anyMatch(name::equalsIgnoreCase);
     }
 
-    public boolean isFriend(String name) {
-        return this.friends.stream().anyMatch(friend -> friend.equalsIgnoreCase(name));
+    public void add(String name) {
+        if (contains(name)) return;
+        friends.add(name);
     }
 
-    public boolean isFriend(Player player) {
-        return this.isFriend(player.getGameProfile().name());
+    public void remove(String name) {
+        friends.removeIf(name::equalsIgnoreCase);
     }
 
-    public void addFriend(String name) {
-        this.friends.add(name);
+    public void clear() {
+        friends.clear();
     }
 
-    public void removeFriend(String name) {
-        friends.removeIf(s -> s.equalsIgnoreCase(name));
+    public boolean getFriendFire() {
+        return Sydney.MODULE_MANAGER.getModule(FriendModule.class).friendlyFire.getValue();
     }
 
-    public List<String> getFriends() {
-        return this.friends;
+    public void sendFriendMessage(String name) {
+        Sydney.MODULE_MANAGER.getModule(FriendModule.class).sendFriendMessage(name);
     }
 
-    @Override
-    public JsonElement toJson() {
-        JsonObject object = new JsonObject();
-        JsonArray array = new JsonArray();
-        for (String friend : friends) {
-            array.add(friend);
-        }
-        object.add("friends", array);
-        return object;
+    public Color getDefaultFriendColor() {
+        return getDefaultFriendColor(255);
     }
 
-    @Override
-    public void fromJson(JsonElement element) {
-        for (JsonElement e : element.getAsJsonObject().get("friends").getAsJsonArray()) {
-            friends.add(e.getAsString());
-        }
-    }
-
-    @Override
-    public String getFileName() {
-        return "friends.json";
+    public Color getDefaultFriendColor(int alpha) {
+        return new Color(85, 255, 255, alpha);
     }
 }

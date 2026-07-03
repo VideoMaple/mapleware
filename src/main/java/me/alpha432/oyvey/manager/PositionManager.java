@@ -1,92 +1,56 @@
-package me.alpha432.oyvey.manager;
+package me.aidan.sydney.managers;
 
-import me.alpha432.oyvey.event.Stage;
-import me.alpha432.oyvey.event.impl.entity.player.UpdateWalkingPlayerEvent;
-import me.alpha432.oyvey.event.system.Subscribe;
-import me.alpha432.oyvey.features.Feature;
-import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import lombok.Getter;
+import me.aidan.sydney.Sydney;
+import me.aidan.sydney.events.SubscribeEvent;
+import me.aidan.sydney.events.impl.PacketSendEvent;
+import me.aidan.sydney.utils.IMinecraft;
+import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 
-public class PositionManager
-        extends Feature {
-    private double x;
-    private double y;
-    private double z;
-    private boolean onground;
-    private double fallDistance;
-
+@Getter
+public class PositionManager implements IMinecraft {
     public PositionManager() {
-        EVENT_BUS.register(this);
+        Sydney.EVENT_HANDLER.subscribe(this);
     }
 
-    @Subscribe
-    public void onUpdateWalkingPlayer(UpdateWalkingPlayerEvent event) {
-        if (event.getStage() == Stage.POST) return;
+    private double serverX;
+    private double serverY;
+    private double serverZ;
 
-        double diff = mc.player.yo - mc.player.getY();
-        if (mc.player.onGround() || diff <= 0) {
-            fallDistance = 0;
-        } else {
-            fallDistance += diff;
+    private boolean serverOnGround;
+
+    private boolean serverSprinting;
+    private boolean serverSneaking;
+
+    private int serverSlot;
+
+    @SubscribeEvent
+    public void onPacketSend(PacketSendEvent event) {
+        if (mc.player == null) return;
+
+        if (event.getPacket() instanceof PlayerMoveC2SPacket packet) {
+            if (packet.changesPosition()) {
+                serverX = packet.getX(mc.player.getX());
+                serverY = packet.getY(mc.player.getY());
+                serverZ = packet.getZ(mc.player.getZ());
+            }
+
+            serverOnGround = packet.isOnGround();
         }
-    }
 
-    public void updatePosition() {
-        this.x = mc.player.getX();
-        this.y = mc.player.getY();
-        this.z = mc.player.getZ();
-        this.onground = mc.player.onGround();
-    }
+        if (event.getPacket() instanceof UpdateSelectedSlotC2SPacket packet) {
+            serverSlot = packet.getSelectedSlot();
+        }
 
-    public void restorePosition() {
-        mc.player.setPos(x, y, z);
-        mc.player.setOnGround(onground);
-    }
-
-    public void setPlayerPosition(double x, double y, double z) {
-        mc.player.setPos(x, y, z);
-    }
-
-    public void setPlayerPosition(double x, double y, double z, boolean onground) {
-        mc.player.setPos(x, y, z);
-        mc.player.setOnGround(onground);
-    }
-
-    public void setPositionPacket(double x, double y, double z, boolean onGround, boolean setPos, boolean noLagBack) {
-        boolean bl = mc.player.horizontalCollision;
-        mc.player.connection.send(new ServerboundMovePlayerPacket.Pos(x, y, z, onGround, bl));
-        if (setPos) {
-            mc.player.setPos(x, y, z);
-            if (noLagBack) {
-                this.updatePosition();
+        if (event.getPacket() instanceof ClientCommandC2SPacket packet) {
+            switch (packet.getMode()) {
+                case START_SPRINTING -> serverSprinting = true;
+                case STOP_SPRINTING -> serverSprinting = false;
+                case PRESS_SHIFT_KEY -> serverSneaking = true;
+                case RELEASE_SHIFT_KEY -> serverSneaking = false;
             }
         }
-    }
-
-    public double getX() {
-        return this.x;
-    }
-
-    public void setX(double x) {
-        this.x = x;
-    }
-
-    public double getY() {
-        return this.y;
-    }
-
-    public void setY(double y) {
-        this.y = y;
-    }
-
-    public double getZ() {
-        return this.z;
-    }
-
-    public void setZ(double z) {
-        this.z = z;
-    }
-
-    public double getFallDistance() {
-        return fallDistance;
     }
 }
